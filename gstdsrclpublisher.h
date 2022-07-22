@@ -91,11 +91,6 @@ struct _GstDsRclPublisher
   // the intermediate scratch buffer for conversions RGBA
   NvBufSurface *inter_buf;
 
-#ifdef WITH_OPENCV
-  // OpenCV mat containing RGB data
-  cv::Mat *cvmat;
-#endif
-
   // Input video info (resolution, color format, framerate, etc)
   GstVideoInfo video_info;
 

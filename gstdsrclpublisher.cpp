@@ -358,20 +358,6 @@ gst_dsrclpublisher_start (GstBaseTransform * btrans)
       dsrclpublisher->batch_size);
   gst_query_unref (queryparams);
 
-  if (dsrclpublisher->process_full_frame && dsrclpublisher->blur_objects) {
-    GST_ERROR ("Error: does not support blurring while processing full frame");
-    goto error;
-  }
-
-#ifndef WITH_OPENCV
-  if (dsrclpublisher->blur_objects) {
-    GST_ELEMENT_ERROR (dsrclpublisher, STREAM, FAILED,
-          ("OpenCV has been deprecated, hence object blurring will not work."
-          "Enable OpenCV compilation in gst-dsrclpublisher Makefile by setting 'WITH_OPENCV:=1"), (NULL));
-    goto error;
-  }
-#endif
-
   CHECK_CUDA_STATUS (cudaStreamCreate (&dsrclpublisher->cuda_stream),
       "Could not create cuda stream");
 
@@ -409,20 +395,6 @@ gst_dsrclpublisher_start (GstBaseTransform * btrans)
   GST_DEBUG_OBJECT (dsrclpublisher, "allocated cuda buffer %p \n",
       dsrclpublisher->host_rgb_buf);
 
-#ifdef WITH_OPENCV
-  /* CV Mat containing interleaved RGB data. This call does not allocate memory.
-   * It uses host_rgb_buf as data. */
-  dsrclpublisher->cvmat =
-      new cv::Mat (dsrclpublisher->processing_height, dsrclpublisher->processing_width,
-      CV_8UC3, dsrclpublisher->host_rgb_buf,
-      dsrclpublisher->processing_width * RGB_BYTES_PER_PIXEL);
-
-  if (!dsrclpublisher->cvmat)
-    goto error;
-
-  GST_DEBUG_OBJECT (dsrclpublisher, "created CV Mat\n");
-#endif
-
   return TRUE;
 error:
   if (dsrclpublisher->host_rgb_buf) {
@@ -455,11 +427,6 @@ gst_dsrclpublisher_stop (GstBaseTransform * btrans)
     cudaStreamDestroy (dsrclpublisher->cuda_stream);
   dsrclpublisher->cuda_stream = NULL;
 
-#ifdef WITH_OPENCV
-  delete dsrclpublisher->cvmat;
-  dsrclpublisher->cvmat = NULL;
-#endif
-
   if (dsrclpublisher->host_rgb_buf) {
     cudaFreeHost (dsrclpublisher->host_rgb_buf);
     dsrclpublisher->host_rgb_buf = NULL;
@@ -487,15 +454,6 @@ gst_dsrclpublisher_set_caps (GstBaseTransform * btrans, GstCaps * incaps,
   /* Save the input video information, since this will be required later. */
   gst_video_info_from_caps (&dsrclpublisher->video_info, incaps);
 
-  if (dsrclpublisher->blur_objects && !dsrclpublisher->process_full_frame) {
-    /* requires RGBA format for blurring the objects in opencv */
-     if (dsrclpublisher->video_info.finfo->format != GST_VIDEO_FORMAT_RGBA) {
-      GST_ELEMENT_ERROR (dsrclpublisher, STREAM, FAILED,
-          ("input format should be RGBA when using blur-objects property"), (NULL));
-      goto error;
-      }
-  }
-
   return TRUE;
 
 error:
@@ -520,9 +478,6 @@ get_converted_mat (GstDsRclPublisher * dsrclpublisher, NvBufSurface *input_buf, 
   NvBufSurfTransformRect src_rect;
   NvBufSurfTransformRect dst_rect;
   NvBufSurface ip_surf;
-#ifdef WITH_OPENCV
-  cv::Mat in_mat;
-#endif
   ip_surf = *input_buf;
 
   ip_surf.numFilled = ip_surf.batchSize = 1;
@@ -609,21 +564,6 @@ get_converted_mat (GstDsRclPublisher * dsrclpublisher, NvBufSurface *input_buf, 
     NvBufSurfaceSyncForCpu (dsrclpublisher->inter_buf, 0, 0);
   }
 
-#ifdef WITH_OPENCV
-  /* Use openCV to remove padding and convert RGBA to BGR. Can be skipped if
-   * algorithm can handle padded RGBA data. */
-  in_mat =
-      cv::Mat (dsrclpublisher->processing_height, dsrclpublisher->processing_width,
-      CV_8UC4, dsrclpublisher->inter_buf->surfaceList[0].mappedAddr.addr[0],
-      dsrclpublisher->inter_buf->surfaceList[0].pitch);
-
-#if (CV_MAJOR_VERSION >= 4)
-  cv::cvtColor (in_mat, *dsrclpublisher->cvmat, cv::COLOR_RGBA2BGR);
-#else
-  cv::cvtColor (in_mat, *dsrclpublisher->cvmat, CV_RGBA2BGR);
-#endif
-#endif
-
     if (NvBufSurfaceUnMap (dsrclpublisher->inter_buf, 0, 0)){
       goto error;
     }
@@ -656,33 +596,6 @@ error:
   return GST_FLOW_ERROR;
 }
 
-#ifdef WITH_OPENCV
-/*
- * Blur the detected objects when processing in object mode (full-frame=0)
- */
-static GstFlowReturn
-blur_objects (GstDsRclPublisher * dsrclpublisher, gint idx,
-    NvOSD_RectParams * crop_rect_params, cv::Mat in_mat)
-{
-  cv::Rect crop_rect;
-
-  if ((crop_rect_params->width == 0) || (crop_rect_params->height == 0)) {
-    GST_ELEMENT_ERROR (dsrclpublisher, STREAM, FAILED,
-        ("%s:crop_rect_params dimensions are zero",__func__), (NULL));
-    return GST_FLOW_ERROR;
-  }
-
-/* rectangle for cropped objects */
-  crop_rect = cv::Rect (crop_rect_params->left, crop_rect_params->top,
-  crop_rect_params->width, crop_rect_params->height);
-
-/* apply gaussian blur to the detected objects */
-  GaussianBlur(in_mat(crop_rect), in_mat(crop_rect), cv::Size(15,15), 4);
-
-  return GST_FLOW_OK;
-}
-#endif
-
 /**
  * Called when element recieves an input buffer from upstream element.
  */
@@ -704,7 +617,9 @@ gst_dsrclpublisher_transform_ip (GstBaseTransform * btrans, GstBuffer * inbuf)
   dsrclpublisher->frame_num++;
   CHECK_CUDA_STATUS (cudaSetDevice (dsrclpublisher->gpu_id),
       "Unable to set cuda device");
-
+ 
+  printf("%s  frame_cnt : %d   %d\n", __FUNCTION__,  dsrclpublisher->frame_num, dsrclpublisher->blur_objects);
+  
   memset (&in_map_info, 0, sizeof (in_map_info));
   if (!gst_buffer_map (inbuf, &in_map_info, GST_MAP_READ)) {
     g_print ("Error: Failed to map gst buffer\n");
@@ -748,15 +663,9 @@ gst_dsrclpublisher_transform_ip (GstBaseTransform * btrans, GstBuffer * inbuf)
       }
 
       /* Process to get the output */
-#ifdef WITH_OPENCV
-      output =
-          DsExampleProcess (dsrclpublisher->dsrclpublisherlib_ctx,
-          dsrclpublisher->cvmat->data);
-#else
       output =
           DsExampleProcess (dsrclpublisher->dsrclpublisherlib_ctx,
           (unsigned char *)dsrclpublisher->inter_buf->surfaceList[0].mappedAddr.addr[0]);
-#endif
       /* Attach the metadata for the full frame */
       attach_metadata_full_frame (dsrclpublisher, frame_meta, scale_ratio, output, i);
       i++;
@@ -769,73 +678,15 @@ gst_dsrclpublisher_transform_ip (GstBaseTransform * btrans, GstBuffer * inbuf)
     NvDsMetaList * l_obj = NULL;
     NvDsObjectMeta *obj_meta = NULL;
 
-    if(!dsrclpublisher->is_integrated) {
-      if (dsrclpublisher->blur_objects) {
-        if (!(surface->memType == NVBUF_MEM_CUDA_UNIFIED || surface->memType == NVBUF_MEM_CUDA_PINNED)){
-          GST_ELEMENT_ERROR (dsrclpublisher, STREAM, FAILED,
-              ("%s:need NVBUF_MEM_CUDA_UNIFIED or NVBUF_MEM_CUDA_PINNED memory for opencv blurring",__func__), (NULL));
-          return GST_FLOW_ERROR;
-        }
-      }
-    }
-
     for (l_frame = batch_meta->frame_meta_list; l_frame != NULL;
       l_frame = l_frame->next)
     {
       frame_meta = (NvDsFrameMeta *) (l_frame->data);
 
-#ifdef WITH_OPENCV
-      cv::Mat in_mat;
-
-      if (dsrclpublisher->blur_objects) {
-        /* Map the buffer so that it can be accessed by CPU */
-        if (surface->surfaceList[frame_meta->batch_id].mappedAddr.addr[0] == NULL){
-          if (NvBufSurfaceMap (surface, frame_meta->batch_id, 0, NVBUF_MAP_READ_WRITE) != 0){
-            GST_ELEMENT_ERROR (dsrclpublisher, STREAM, FAILED,
-                ("%s:buffer map to be accessed by CPU failed", __func__), (NULL));
-            return GST_FLOW_ERROR;
-          }
-        }
-
-        /* Cache the mapped data for CPU access */
-        if(dsrclpublisher->inter_buf->memType == NVBUF_MEM_SURFACE_ARRAY)
-          NvBufSurfaceSyncForCpu (surface, frame_meta->batch_id, 0);
-
-        in_mat =
-            cv::Mat (surface->surfaceList[frame_meta->batch_id].planeParams.height[0],
-            surface->surfaceList[frame_meta->batch_id].planeParams.width[0], CV_8UC4,
-            surface->surfaceList[frame_meta->batch_id].mappedAddr.addr[0],
-            surface->surfaceList[frame_meta->batch_id].planeParams.pitch[0]);
-      }
-#endif
-
       for (l_obj = frame_meta->obj_meta_list; l_obj != NULL;
           l_obj = l_obj->next)
       {
         obj_meta = (NvDsObjectMeta *) (l_obj->data);
-
-        if (dsrclpublisher->blur_objects) {
-          /* gaussian blur the detected objects using opencv */
-#ifdef WITH_OPENCV
-          if (blur_objects (dsrclpublisher, frame_meta->batch_id,
-            &obj_meta->rect_params, in_mat) != GST_FLOW_OK) {
-          /* Error in blurring, skip processing on object. */
-            GST_ELEMENT_ERROR (dsrclpublisher, STREAM, FAILED,
-            ("blurring the object failed"), (NULL));
-            if (NvBufSurfaceUnMap (surface, frame_meta->batch_id, 0)){
-              GST_ELEMENT_ERROR (dsrclpublisher, STREAM, FAILED,
-                ("%s:buffer unmap to be accessed by CPU failed", __func__), (NULL));
-            }
-            return GST_FLOW_ERROR;
-          }
-          continue;
-#else
-          GST_ELEMENT_ERROR (dsrclpublisher, STREAM, FAILED,
-          ("OpenCV has been deprecated, hence object blurring will not work."
-          "Enable OpenCV compilation in gst-dsrclpublisher Makefile by setting 'WITH_OPENCV:=1"), (NULL));
-          return GST_FLOW_ERROR;
-#endif
-        }
 
         /* Should not process on objects smaller than MIN_INPUT_OBJECT_WIDTH x MIN_INPUT_OBJECT_HEIGHT
          * since it will cause hardware scaling issues. */
@@ -852,43 +703,15 @@ gst_dsrclpublisher_transform_ip (GstBaseTransform * btrans, GstBuffer * inbuf)
           continue;
         }
 
-#ifdef WITH_OPENCV
-        /* Process the object crop to obtain label */
-        output = DsExampleProcess (dsrclpublisher->dsrclpublisherlib_ctx,
-            dsrclpublisher->cvmat->data);
-#else
         /* Process the object crop to obtain label */
         output = DsExampleProcess (dsrclpublisher->dsrclpublisherlib_ctx,
             (unsigned char *)dsrclpublisher->inter_buf->surfaceList[0].mappedAddr.addr[0]);
-#endif
-
         /* Attach labels for the object */
         attach_metadata_object (dsrclpublisher, obj_meta, output);
 
         free (output);
       }
 
-      if (dsrclpublisher->blur_objects) {
-      /* Cache the mapped data for device access */
-        if(dsrclpublisher->inter_buf->memType == NVBUF_MEM_SURFACE_ARRAY) 
-          NvBufSurfaceSyncForDevice (surface, frame_meta->batch_id, 0);
-
-#ifdef WITH_OPENCV
-#ifdef dsrclpublisher_DEBUG
-        /* Use openCV to remove padding and convert RGBA to BGR. Can be skipped if
-        * algorithm can handle padded RGBA data. */
-#if (CV_MAJOR_VERSION >= 4)
-        cv::cvtColor (in_mat, *dsrclpublisher->cvmat, cv::COLOR_RGBA2BGR);
-#else
-        cv::cvtColor (in_mat, *dsrclpublisher->cvmat, CV_RGBA2BGR);
-#endif
-        /* used to dump the converted mat to files for debug */
-        static guint cnt = 0;
-        cv::imwrite("out_" + std::to_string (cnt) + ".jpeg", *dsrclpublisher->cvmat);
-        cnt++;
-#endif
-#endif
-      }
     }
   }
   flow_ret = GST_FLOW_OK;
