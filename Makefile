@@ -39,9 +39,9 @@ LIB:=libnvds_rclpublisher.so
 
 NVDS_VERSION:=6.1
 
-DEP:=dsexample_lib/libdsexample.a
-DEP_FILES:=$(wildcard dsexample_lib/dsexample_lib.* )
-DEP_FILES-=$(DEP)
+#DEP:=dsexample_lib/libdsexample.a
+#DEP_FILES:=$(wildcard dsexample_lib/dsexample_lib.* )
+#DEP_FILES-=$(DEP)
 
 CFLAGS+= -fPIC -DDS_VERSION=\"6.1.0\" \
 	 -I /usr/local/cuda-$(CUDA_VER)/include \
@@ -51,7 +51,6 @@ GST_INSTALL_DIR?=/opt/nvidia/deepstream/deepstream-$(NVDS_VERSION)/lib/gst-plugi
 LIB_INSTALL_DIR?=/opt/nvidia/deepstream/deepstream-$(NVDS_VERSION)/lib/
 
 LIBS := -shared -Wl,-no-undefined \
-	-L dsexample_lib -ldsexample \
 	-L/usr/local/cuda-$(CUDA_VER)/lib64/ -lcudart -ldl \
 	-lnppc -lnppig -lnpps -lnppicc -lnppidei \
 	-L$(LIB_INSTALL_DIR) -lnvdsgst_helper -lnvdsgst_meta -lnvds_meta -lnvbufsurface -lnvbufsurftransform\

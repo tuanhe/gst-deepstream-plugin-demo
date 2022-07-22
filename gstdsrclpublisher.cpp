@@ -132,12 +132,6 @@ static gboolean gst_dsrclpublisher_stop (GstBaseTransform * btrans);
 static GstFlowReturn gst_dsrclpublisher_transform_ip (GstBaseTransform *
     btrans, GstBuffer * inbuf);
 
-static void
-attach_metadata_full_frame (GstDsRclPublisher * dsrclpublisher, NvDsFrameMeta *frame_meta,
-    gdouble scale_ratio, DsExampleOutput * output, guint batch_id);
-static void attach_metadata_object (GstDsRclPublisher * dsrclpublisher,
-    NvDsObjectMeta * obj_meta, DsExampleOutput * output);
-
 /* Install properties, set sink and src pad capabilities, override the required
  * functions of the base class, These are common to all instances of the
  * element.
@@ -326,19 +320,19 @@ gst_dsrclpublisher_start (GstBaseTransform * btrans)
 {
   GstDsRclPublisher *dsrclpublisher = GST_DSRCLPUBLISHER (btrans);
   NvBufSurfaceCreateParams create_params;
-  DsExampleInitParams init_params =
-      { dsrclpublisher->processing_width, dsrclpublisher->processing_height,
-    dsrclpublisher->process_full_frame
-  };
+  //DsExampleInitParams init_params =
+  //    { dsrclpublisher->processing_width, dsrclpublisher->processing_height,
+  //  dsrclpublisher->process_full_frame
+  //};
 
   GstQuery *queryparams = NULL;
   guint batch_size = 1;
   int val = -1;
 
   /* Algorithm specific initializations and resource allocation. */
-  dsrclpublisher->dsrclpublisherlib_ctx = DsExampleCtxInit (&init_params);
+  //dsrclpublisher->dsrclpublisherlib_ctx = DsExampleCtxInit (&init_params);
 
-  GST_DEBUG_OBJECT (dsrclpublisher, "ctx lib %p \n", dsrclpublisher->dsrclpublisherlib_ctx);
+  //GST_DEBUG_OBJECT (dsrclpublisher, "ctx lib %p \n", dsrclpublisher->dsrclpublisherlib_ctx);
 
   CHECK_CUDA_STATUS (cudaSetDevice (dsrclpublisher->gpu_id),
       "Unable to set cuda device");
@@ -406,8 +400,8 @@ error:
     cudaStreamDestroy (dsrclpublisher->cuda_stream);
     dsrclpublisher->cuda_stream = NULL;
   }
-  if (dsrclpublisher->dsrclpublisherlib_ctx)
-    DsExampleCtxDeinit (dsrclpublisher->dsrclpublisherlib_ctx);
+  //if (dsrclpublisher->dsrclpublisherlib_ctx)
+  //  DsExampleCtxDeinit (dsrclpublisher->dsrclpublisherlib_ctx);
   return FALSE;
 }
 
@@ -435,8 +429,8 @@ gst_dsrclpublisher_stop (GstBaseTransform * btrans)
   GST_DEBUG_OBJECT (dsrclpublisher, "deleted CV Mat \n");
 
   /* Deinit the algorithm library */
-  DsExampleCtxDeinit (dsrclpublisher->dsrclpublisherlib_ctx);
-  dsrclpublisher->dsrclpublisherlib_ctx = NULL;
+  //DsExampleCtxDeinit (dsrclpublisher->dsrclpublisherlib_ctx);
+  //dsrclpublisher->dsrclpublisherlib_ctx = NULL;
 
   GST_DEBUG_OBJECT (dsrclpublisher, "ctx lib released \n");
 
@@ -461,142 +455,6 @@ error:
 }
 
 /**
- * Scale the entire frame to the processing resolution maintaining aspect ratio.
- * Or crop and scale objects to the processing resolution maintaining the aspect
- * ratio. Remove the padding required by hardware and convert from RGBA to RGB
- * using openCV. These steps can be skipped if the algorithm can work with
- * padded data and/or can work with RGBA.
- */
-static GstFlowReturn
-get_converted_mat (GstDsRclPublisher * dsrclpublisher, NvBufSurface *input_buf, gint idx,
-    NvOSD_RectParams * crop_rect_params, gdouble & ratio, gint input_width,
-    gint input_height)
-{
-  NvBufSurfTransform_Error err;
-  NvBufSurfTransformConfigParams transform_config_params;
-  NvBufSurfTransformParams transform_params;
-  NvBufSurfTransformRect src_rect;
-  NvBufSurfTransformRect dst_rect;
-  NvBufSurface ip_surf;
-  ip_surf = *input_buf;
-
-  ip_surf.numFilled = ip_surf.batchSize = 1;
-  ip_surf.surfaceList = &(input_buf->surfaceList[idx]);
-
-  gint src_left = GST_ROUND_UP_2((unsigned int)crop_rect_params->left);
-  gint src_top = GST_ROUND_UP_2((unsigned int)crop_rect_params->top);
-  gint src_width = GST_ROUND_DOWN_2((unsigned int)crop_rect_params->width);
-  gint src_height = GST_ROUND_DOWN_2((unsigned int)crop_rect_params->height);
-
-  /* Maintain aspect ratio */
-  double hdest = dsrclpublisher->processing_width * src_height / (double) src_width;
-  double wdest = dsrclpublisher->processing_height * src_width / (double) src_height;
-  guint dest_width, dest_height;
-
-  if (hdest <= dsrclpublisher->processing_height) {
-    dest_width = dsrclpublisher->processing_width;
-    dest_height = hdest;
-  } else {
-    dest_width = wdest;
-    dest_height = dsrclpublisher->processing_height;
-  }
-
-  /* Configure transform session parameters for the transformation */
-  transform_config_params.compute_mode = NvBufSurfTransformCompute_Default;
-  transform_config_params.gpu_id = dsrclpublisher->gpu_id;
-  transform_config_params.cuda_stream = dsrclpublisher->cuda_stream;
-
-  /* Set the transform session parameters for the conversions executed in this
-   * thread. */
-  err = NvBufSurfTransformSetSessionParams (&transform_config_params);
-  if (err != NvBufSurfTransformError_Success) {
-    GST_ELEMENT_ERROR (dsrclpublisher, STREAM, FAILED,
-        ("NvBufSurfTransformSetSessionParams failed with error %d", err), (NULL));
-    goto error;
-  }
-
-  /* Calculate scaling ratio while maintaining aspect ratio */
-  ratio = MIN (1.0 * dest_width/ src_width, 1.0 * dest_height / src_height);
-
-  if ((crop_rect_params->width == 0) || (crop_rect_params->height == 0)) {
-    GST_ELEMENT_ERROR (dsrclpublisher, STREAM, FAILED,
-        ("%s:crop_rect_params dimensions are zero",__func__), (NULL));
-    goto error;
-  }
-
-#ifdef __aarch64__
-  if (ratio <= 1.0 / 16 || ratio >= 16.0) {
-    /* Currently cannot scale by ratio > 16 or < 1/16 for Jetson */
-    goto error;
-  }
-#endif
-  /* Set the transform ROIs for source and destination */
-  src_rect = {(guint)src_top, (guint)src_left, (guint)src_width, (guint)src_height};
-  dst_rect = {0, 0, (guint)dest_width, (guint)dest_height};
-
-  /* Set the transform parameters */
-  transform_params.src_rect = &src_rect;
-  transform_params.dst_rect = &dst_rect;
-  transform_params.transform_flag =
-    NVBUFSURF_TRANSFORM_FILTER | NVBUFSURF_TRANSFORM_CROP_SRC |
-      NVBUFSURF_TRANSFORM_CROP_DST;
-  transform_params.transform_filter = NvBufSurfTransformInter_Default;
-
-  /* Memset the memory */
-  NvBufSurfaceMemSet (dsrclpublisher->inter_buf, 0, 0, 0);
-
-  GST_DEBUG_OBJECT (dsrclpublisher, "Scaling and converting input buffer\n");
-
-  /* Transformation scaling+format conversion if any. */
-  err = NvBufSurfTransform (&ip_surf, dsrclpublisher->inter_buf, &transform_params);
-  if (err != NvBufSurfTransformError_Success) {
-    GST_ELEMENT_ERROR (dsrclpublisher, STREAM, FAILED,
-        ("NvBufSurfTransform failed with error %d while converting buffer", err),
-        (NULL));
-    goto error;
-  }
-  /* Map the buffer so that it can be accessed by CPU */
-  if (NvBufSurfaceMap (dsrclpublisher->inter_buf, 0, 0, NVBUF_MAP_READ) != 0){
-    goto error;
-  }
-  if(dsrclpublisher->inter_buf->memType == NVBUF_MEM_SURFACE_ARRAY) {
-    /* Cache the mapped data for CPU access */
-    NvBufSurfaceSyncForCpu (dsrclpublisher->inter_buf, 0, 0);
-  }
-
-    if (NvBufSurfaceUnMap (dsrclpublisher->inter_buf, 0, 0)){
-      goto error;
-    }
-
-  if(dsrclpublisher->is_integrated) {
-#ifdef __aarch64__
-    /* To use the converted buffer in CUDA, create an EGLImage and then use
-    * CUDA-EGL interop APIs */
-    if (USE_EGLIMAGE) {
-      if (NvBufSurfaceMapEglImage (dsrclpublisher->inter_buf, 0) !=0 ) {
-        goto error;
-      }
-
-      /* dsrclpublisher->inter_buf->surfaceList[0].mappedAddr.eglImage
-      * Use interop APIs cuGraphicsEGLRegisterImage and
-      * cuGraphicsResourceGetMappedEglFrame to access the buffer in CUDA */
-
-      /* Destroy the EGLImage */
-      NvBufSurfaceUnMapEglImage (dsrclpublisher->inter_buf, 0);
-    }
-#endif
-  }
-
-  /* We will first convert only the Region of Interest (the entire frame or the
-   * object bounding box) to RGB and then scale the converted RGB frame to
-   * processing resolution. */
-  return GST_FLOW_OK;
-
-error:
-  return GST_FLOW_ERROR;
-}
-
-/**
  * Called when element recieves an input buffer from upstream element.
  */
 static GstFlowReturn
@@ -606,7 +464,7 @@ gst_dsrclpublisher_transform_ip (GstBaseTransform * btrans, GstBuffer * inbuf)
   GstMapInfo in_map_info;
   GstFlowReturn flow_ret = GST_FLOW_ERROR;
   gdouble scale_ratio = 1.0;
-  DsExampleOutput *output;
+  //DsExampleOutput *output;
 
   NvBufSurface *surface = NULL;
   NvDsBatchMeta *batch_meta = NULL;
@@ -618,7 +476,7 @@ gst_dsrclpublisher_transform_ip (GstBaseTransform * btrans, GstBuffer * inbuf)
   CHECK_CUDA_STATUS (cudaSetDevice (dsrclpublisher->gpu_id),
       "Unable to set cuda device");
  
-  printf("%s  frame_cnt : %d   %d\n", __FUNCTION__,  dsrclpublisher->frame_num, dsrclpublisher->blur_objects);
+  printf("%s  frame_cnt : %ld  (comment out)\n", __FUNCTION__,  dsrclpublisher->frame_num);
   
   memset (&in_map_info, 0, sizeof (in_map_info));
   if (!gst_buffer_map (inbuf, &in_map_info, GST_MAP_READ)) {
@@ -642,78 +500,6 @@ gst_dsrclpublisher_transform_ip (GstBaseTransform * btrans, GstBuffer * inbuf)
     return GST_FLOW_ERROR;
   }
 
-  if (dsrclpublisher->process_full_frame) {
-    for (l_frame = batch_meta->frame_meta_list; l_frame != NULL;
-      l_frame = l_frame->next)
-    {
-      frame_meta = (NvDsFrameMeta *) (l_frame->data);
-      NvOSD_RectParams rect_params;
-
-      /* Scale the entire frame to processing resolution */
-      rect_params.left = 0;
-      rect_params.top = 0;
-      rect_params.width = dsrclpublisher->video_info.width;
-      rect_params.height = dsrclpublisher->video_info.height;
-
-      /* Scale and convert the frame */
-      if (get_converted_mat (dsrclpublisher, surface, i, &rect_params,
-            scale_ratio, dsrclpublisher->video_info.width,
-            dsrclpublisher->video_info.height) != GST_FLOW_OK) {
-        goto error;
-      }
-
-      /* Process to get the output */
-      output =
-          DsExampleProcess (dsrclpublisher->dsrclpublisherlib_ctx,
-          (unsigned char *)dsrclpublisher->inter_buf->surfaceList[0].mappedAddr.addr[0]);
-      /* Attach the metadata for the full frame */
-      attach_metadata_full_frame (dsrclpublisher, frame_meta, scale_ratio, output, i);
-      i++;
-      free (output);
-    }
-
-  } else {
-    /* Using object crops as input to the algorithm. The objects are detected by
-     * the primary detector */
-    NvDsMetaList * l_obj = NULL;
-    NvDsObjectMeta *obj_meta = NULL;
-
-    for (l_frame = batch_meta->frame_meta_list; l_frame != NULL;
-      l_frame = l_frame->next)
-    {
-      frame_meta = (NvDsFrameMeta *) (l_frame->data);
-
-      for (l_obj = frame_meta->obj_meta_list; l_obj != NULL;
-          l_obj = l_obj->next)
-      {
-        obj_meta = (NvDsObjectMeta *) (l_obj->data);
-
-        /* Should not process on objects smaller than MIN_INPUT_OBJECT_WIDTH x MIN_INPUT_OBJECT_HEIGHT
-         * since it will cause hardware scaling issues. */
-        if (obj_meta->rect_params.width < MIN_INPUT_OBJECT_WIDTH ||
-            obj_meta->rect_params.height < MIN_INPUT_OBJECT_HEIGHT)
-          continue;
-
-        /* Crop and scale the object */
-        if (get_converted_mat (dsrclpublisher,
-              surface, frame_meta->batch_id, &obj_meta->rect_params,
-              scale_ratio, dsrclpublisher->video_info.width,
-              dsrclpublisher->video_info.height) != GST_FLOW_OK) {
-          /* Error in conversion, skip processing on object. */
-          continue;
-        }
-
-        /* Process the object crop to obtain label */
-        output = DsExampleProcess (dsrclpublisher->dsrclpublisherlib_ctx,
-            (unsigned char *)dsrclpublisher->inter_buf->surfaceList[0].mappedAddr.addr[0]);
-        /* Attach labels for the object */
-        attach_metadata_object (dsrclpublisher, obj_meta, output);
-
-        free (output);
-      }
-
-    }
-  }
   flow_ret = GST_FLOW_OK;
 
 error:
@@ -721,125 +507,6 @@ error:
   nvds_set_output_system_timestamp (inbuf, GST_ELEMENT_NAME (dsrclpublisher));
   gst_buffer_unmap (inbuf, &in_map_info);
   return flow_ret;
-}
-
-/**
- * Attach metadata for the full frame. We will be adding a new metadata.
- */
-static void
-attach_metadata_full_frame (GstDsRclPublisher * dsrclpublisher, NvDsFrameMeta *frame_meta,
-    gdouble scale_ratio, DsExampleOutput * output, guint batch_id)
-{
-  NvDsBatchMeta *batch_meta = frame_meta->base_meta.batch_meta;
-  NvDsObjectMeta *object_meta = NULL;
-  static gchar font_name[] = "Serif";
-  GST_DEBUG_OBJECT (dsrclpublisher, "Attaching metadata %d\n", output->numObjects);
-
-  for (gint i = 0; i < output->numObjects; i++) {
-    DsExampleObject *obj = &output->object[i];
-    object_meta = nvds_acquire_obj_meta_from_pool(batch_meta);
-    NvOSD_RectParams & rect_params = object_meta->rect_params;
-    NvOSD_TextParams & text_params = object_meta->text_params;
-
-    /* Assign bounding box coordinates */
-    rect_params.left = obj->left;
-    rect_params.top = obj->top;
-    rect_params.width = obj->width;
-    rect_params.height = obj->height;
-
-    /* Semi-transparent yellow background */
-    rect_params.has_bg_color = 0;
-    rect_params.bg_color = (NvOSD_ColorParams) {
-    1, 1, 0, 0.4};
-    /* Red border of width 6 */
-    rect_params.border_width = 3;
-    rect_params.border_color = (NvOSD_ColorParams) {
-    1, 0, 0, 1};
-
-    /* Scale the bounding boxes proportionally based on how the object/frame was
-     * scaled during input */
-    rect_params.left /= scale_ratio;
-    rect_params.top /= scale_ratio;
-    rect_params.width /= scale_ratio;
-    rect_params.height /= scale_ratio;
-    GST_DEBUG_OBJECT (dsrclpublisher, "Attaching rect%d of batch%u"
-        "  left->%f top->%f width->%f"
-        " height->%f label->%s\n", i, batch_id, rect_params.left,
-        rect_params.top, rect_params.width, rect_params.height, obj->label);
-
-    object_meta->object_id = UNTRACKED_OBJECT_ID;
-    g_strlcpy (object_meta->obj_label, obj->label, MAX_LABEL_SIZE);
-    /* display_text required heap allocated memory */
-    text_params.display_text = g_strdup (obj->label);
-    /* Display text above the left top corner of the object */
-    text_params.x_offset = rect_params.left;
-    text_params.y_offset = rect_params.top - 10;
-    /* Set black background for the text */
-    text_params.set_bg_clr = 1;
-    text_params.text_bg_clr = (NvOSD_ColorParams) {
-    0, 0, 0, 1};
-    /* Font face, size and color */
-    text_params.font_params.font_name = font_name;
-    text_params.font_params.font_size = 11;
-    text_params.font_params.font_color = (NvOSD_ColorParams) {
-    1, 1, 1, 1};
-
-    nvds_add_obj_meta_to_frame(frame_meta, object_meta, NULL);
-    frame_meta->bInferDone = TRUE;
-  }
-}
-
-/**
- * Only update string label in an existing object metadata. No bounding boxes.
- * We assume only one label per object is generated
- */
-static void
-attach_metadata_object (GstDsRclPublisher * dsrclpublisher, NvDsObjectMeta * obj_meta,
-    DsExampleOutput * output)
-{
-  if (output->numObjects == 0)
-    return;
-  NvDsBatchMeta *batch_meta = obj_meta->base_meta.batch_meta;
-
-  NvDsClassifierMeta *classifier_meta =
-    nvds_acquire_classifier_meta_from_pool (batch_meta);
-
-  classifier_meta->unique_component_id = dsrclpublisher->unique_id;
-
-  NvDsLabelInfo *label_info =
-    nvds_acquire_label_info_meta_from_pool (batch_meta);
-  g_strlcpy (label_info->result_label, output->object[0].label, MAX_LABEL_SIZE);
-  nvds_add_label_info_meta_to_classifier(classifier_meta, label_info);
-  nvds_add_classifier_meta_to_object (obj_meta, classifier_meta);
-
-  nvds_acquire_meta_lock (batch_meta);
-  NvOSD_TextParams & text_params = obj_meta->text_params;
-  NvOSD_RectParams & rect_params = obj_meta->rect_params;
-
-  /* Below code to display the result */
-  /* Set black background for the text
-   * display_text required heap allocated memory */
-  if (text_params.display_text) {
-    gchar *conc_string = g_strconcat (text_params.display_text, " ",
-        output->object[0].label, NULL);
-    g_free (text_params.display_text);
-    text_params.display_text = conc_string;
-  } else {
-    /* Display text above the left top corner of the object */
-    text_params.x_offset = rect_params.left;
-    text_params.y_offset = rect_params.top - 10;
-    text_params.display_text = g_strdup (output->object[0].label);
-    /* Font face, size and color */
-    text_params.font_params.font_name = (char *)"Serif";
-    text_params.font_params.font_size = 11;
-    text_params.font_params.font_color = (NvOSD_ColorParams) {
-    1, 1, 1, 1};
-    /* Set black background for the text */
-    text_params.set_bg_clr = 1;
-    text_params.text_bg_clr = (NvOSD_ColorParams) {
-    0, 0, 0, 1};
-  }
-  nvds_release_meta_lock (batch_meta);
 }
 
 /**
