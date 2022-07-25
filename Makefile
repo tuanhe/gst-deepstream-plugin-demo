@@ -32,10 +32,10 @@ endif
 TARGET_DEVICE = $(shell gcc -dumpmachine | cut -f1 -d -)
 CXX:= g++
 
-SRCS:= gstdsrclpublisher.cpp
+SRCS:= gstdsdemo.cpp
 
 INCS:= $(wildcard *.h)
-LIB:=libnvds_rclpublisher.so
+LIB:=libnvds_demo.so
 
 NVDS_VERSION:=6.1
 

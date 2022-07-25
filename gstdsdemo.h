@@ -20,8 +20,8 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef __GST_dsrclpublisher_H__
-#define __GST_dsrclpublisher_H__
+#ifndef __GST_DSDEMO_H__
+#define __GST_DSDEMO_H__
 
 #include <gst/base/gstbasetransform.h>
 #include <gst/video/video.h>
@@ -30,10 +30,6 @@
 #pragma GCC diagnostic push
 #if __GNUC__ >= 8
 #pragma GCC diagnostic ignored "-Wclass-memaccess"
-#endif
-#ifdef WITH_OPENCV
-#include "opencv2/imgproc/imgproc.hpp"
-#include "opencv2/highgui/highgui.hpp"
 #endif
 #pragma GCC diagnostic pop
 
@@ -56,19 +52,19 @@
 
 G_BEGIN_DECLS
 /* Standard boilerplate stuff */
-typedef struct _GstDsRclPublisher GstDsRclPublisher;
-typedef struct _GstDsRclPublisherClass GstDsRclPublisherClass;
+typedef struct _GstDsDemo GstDsDemo;
+typedef struct _GstDsDemoClass GstDsDemoClass;
 
 /* Standard boilerplate stuff */
-#define GST_TYPE_DSRCLPUBLISHER (gst_dsrclpublisher_get_type())
-#define GST_DSRCLPUBLISHER(obj) (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_DSRCLPUBLISHER,GstDsRclPublisher))
-#define GST_DSRCLPUBLISHER_CLASS(klass) (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_DSRCLPUBLISHER,GstDsRclPublisherClass))
-#define GST_DSRCLPUBLISHER_GET_CLASS(obj) (G_TYPE_INSTANCE_GET_CLASS((obj), GST_TYPE_DSRCLPUBLISHER, GstDsRclPublisherClass))
-#define GST_IS_dsrclpublisher(obj) (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_DSRCLPUBLISHER))
-#define GST_IS_dsrclpublisher_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_DSRCLPUBLISHER))
-#define GST_DSRCLPUBLISHER_CAST(obj)  ((GstDsRclPublisher *)(obj))
+#define GST_TYPE_DSDEMO (gst_dsdemo_get_type())
+#define GST_DSDEMO(obj) (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_DSDEMO,GstDsDemo))
+#define GST_DSDEMO_CLASS(klass) (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_DSDEMO,GstDsDemoClass))
+#define GST_DSDEMO_GET_CLASS(obj) (G_TYPE_INSTANCE_GET_CLASS((obj), GST_TYPE_DSDEMO, GstDsDemoClass))
+#define GST_IS_DSDEMO(obj) (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_DSDEMO))
+#define GST_IS_DSDEMO_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_DSDEMO))
+#define GST_DSDEMO_CAST(obj)  ((GstDsDemo *)(obj))
 
-struct _GstDsRclPublisher
+struct _GstDsDemo
 {
   GstBaseTransform base_trans;
 
@@ -115,12 +111,12 @@ struct _GstDsRclPublisher
 };
 
 // Boiler plate stuff
-struct _GstDsRclPublisherClass
+struct _GstDsDemoClass
 {
   GstBaseTransformClass parent_class;
 };
 
-GType gst_dsrclpublisher_get_type (void);
+GType gst_dsdemo_get_type (void);
 
 G_END_DECLS
-#endif /* __GST_DSRCLPUBLISHER_H__ */
+#endif /* __GST_DSDEMO_H__ */
